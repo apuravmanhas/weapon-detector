@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+yolo-env/
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables & secrets (Security safeguard)
+.env
+*.env
+.env.*
+secrets/
+*.pem
+*.key
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# YOLO runs & outputs
+runs/
+output/
+*.log
+
+# Large media files (prevents accidental video commits)
+*.mp4
+*.avi
+*.mov
+*.mkv
