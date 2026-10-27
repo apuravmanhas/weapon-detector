@@ -2,6 +2,8 @@
 
 Real-time automated weapon detection pipeline designed for surveillance cameras and CCTV feeds, built using a fine-tuned YOLO11m architecture.
 
+![Detection Preview](docs/demo_detection.jpg)
+
 ---
 
 ## Overview
@@ -41,7 +43,10 @@ Evaluated on held-out validation data across 60 training epochs:
 
 ```text
 weapon-detector/
+├── assets/
+│   └── sample.jpg        # Unannotated test frame for quick verification
 ├── docs/
+│   ├── demo_detection.jpg
 │   ├── confusion_matrix.png
 │   ├── pr_curve.png
 │   └── training_results.png
@@ -87,23 +92,23 @@ pip install -r requirements.txt
 
 ## Usage
 
-### 1. Live Webcam Feed
+### 1. Quick Verification (Sample Image)
+Run inference on the included sample image to verify your setup:
+```bash
+python detect.py --source assets/sample.jpg --save result.jpg
+```
+
+### 2. Live Webcam Feed
 Runs real-time detection on your default camera:
 ```bash
 python detect.py --source 0
 ```
 *Note for Windows users:* The script automatically selects the `DirectShow` backend to avoid camera initialization freezes.
 
-### 2. Video File
+### 3. Video File
 Process a recorded CCTV or video clip and save the annotated output:
 ```bash
 python detect.py --source input_cctv.mp4 --save output_annotated.mp4
-```
-
-### 3. Single Image
-Run inference on a static photo:
-```bash
-python detect.py --source test_image.jpg --save result.jpg
 ```
 
 ---
