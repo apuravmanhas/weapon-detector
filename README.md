@@ -1,41 +1,38 @@
 # weapon-detector
 
-Real-time automated weapon detection pipeline designed for surveillance cameras and CCTV feeds, built using a fine-tuned YOLO11m architecture.
+Real-time automated weapon detection pipeline for CCTV and surveillance video streams, powered by fine-tuned Ultralytics YOLO11 architectures.
 
-![Detection Preview](docs/demo_detection.jpg)
+![CCTV Detection Preview](docs/cctv_robbery_output.jpg)
 
 ---
 
 ## Overview
 
-Automated weapon detection in surveillance environments requires high precision to prevent false alarms while maintaining real-time frame rates. This project provides a complete, self-contained detection pipeline fine-tuned on a sanitized, single-class (`weapon`) dataset.
+Automated surveillance weapon detection requires high detection recall on small, partially occluded threats while eliminating false alarms from everyday metallic items (phones, power tools, wallets). 
 
-- **Architecture:** YOLO11m (Medium variant)
-- **Parameters:** 20.05 Million
-- **Computational Complexity:** 68.3 GFLOPs
-- **Input Resolution:** 640 × 640
-- **Primary Class:** `weapon` (unified handguns, rifles, shotguns, and knives)
+This repository provides two pre-trained model variants fine-tuned on consolidated surveillance datasets:
+1. **YOLO11x Production Model** (Default): 56.96M parameters, trained on 37,641 high-security surveillance frames with hard-negative mining.
+2. **YOLO11m Baseline Model**: 20.05M parameters, lightweight variant optimized for edge or low-compute devices.
+
+Both models enforce a unified single-class surveillance taxonomy (`{0: 'weapon'}`) covering handguns, assault rifles, shotguns, and bladed weapons.
 
 ---
 
-## Benchmark Performance
+## Model Zoo & Benchmark Performance
 
-Evaluated on held-out validation data across 60 training epochs:
+Evaluated on held-out validation sets across standard COCO evaluation metrics:
 
-| Metric | Score |
-| :--- | :--- |
-| **Precision (P)** | **94.3%** |
-| **Recall (R)** | **66.0%** |
-| **mAP@50** | **75.9%** |
-| **mAP@50-95** | **47.7%** |
-| **Inference Speed (NVIDIA RTX 3050)** | ~21.5 ms / frame (~46 FPS) |
-| **Inference Speed (Tesla T4 GPU)** | ~14.4 ms / frame (~69 FPS) |
+| Model Variant | Weights File | Parameters | GFLOPs | Precision | Recall | mAP@50 | mAP@50-95 | GPU Inference (RTX 3050) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **YOLO11x (Production)** | `weights/yolo11x_weapon_production.pt` | **56.96M** | 194.5 | 88.6% | **83.2%** | **89.5%** | **63.3%** | ~15.5 ms (64.5 FPS) |
+| **YOLO11m (Baseline)** | `weights/best.pt` | 20.05M | 68.3 | **94.3%** | 66.0% | 75.9% | 47.7% | ~21.5 ms (46.5 FPS) |
 
-### Validation Curves & Confusion Matrix
+![Model Benchmark Comparison](docs/model_comparison.png)
 
-| Precision-Recall Curve | Confusion Matrix |
-| :---: | :---: |
-| ![PR Curve](docs/pr_curve.png) | ![Confusion Matrix](docs/confusion_matrix.png) |
+### Key Improvements in YOLO11x
+- **+13.6% mAP@50** (89.5% vs. 75.9%) and **+15.6% mAP@50-95** (63.3% vs. 47.7%).
+- **+17.2% Recall** (83.2% vs. 66.0%): Substantially reduces missed detections of concealed or low-contrast firearms in surveillance footage.
+- **Hard-Negative Mining**: 1,634 background frames containing mobile phones, wallets, power tools, and metallic utensils to suppress false positives in high-risk zones.
 
 ---
 
@@ -43,22 +40,26 @@ Evaluated on held-out validation data across 60 training epochs:
 
 ```text
 weapon-detector/
+├── .gitattributes          # Git LFS configuration for large model weights
 ├── assets/
-│   └── sample.jpg        # Unannotated test frame for quick verification
+│   └── sample.jpg          # Unannotated sample frame for verification
 ├── docs/
+│   ├── cctv_robbery_output.jpg
+│   ├── model_comparison.png
 │   ├── demo_detection.jpg
 │   ├── confusion_matrix.png
 │   ├── pr_curve.png
 │   └── training_results.png
 ├── src/
 │   ├── __init__.py
-│   └── detector.py       # Core WeaponDetector class
+│   └── detector.py         # Core WeaponDetector class
 ├── weights/
-│   └── best.pt           # Fine-tuned YOLO11m weights (~38.6 MB)
-├── detect.py             # CLI interface for webcam, video, and image inference
-├── requirements.txt      # Python dependencies
-├── .gitignore            # Security filters (blocks secrets, cache, temp media)
-├── LICENSE               # MIT License
+│   ├── yolo11x_weapon_production.pt  # Production YOLO11x weights (114.5 MB, Git LFS)
+│   └── best.pt                       # Baseline YOLO11m weights (38.6 MB)
+├── detect.py               # CLI interface for webcam, video, and image inference
+├── requirements.txt        # Python package dependencies
+├── .gitignore              # Ignores credentials, caches, and test media
+├── LICENSE                 # MIT License
 └── README.md
 ```
 
@@ -66,21 +67,26 @@ weapon-detector/
 
 ## Installation
 
-### 1. Clone the repository
+### Prerequisites
+- Python 3.9+
+- [Git LFS](https://git-lfs.com/) (required to pull the 114.5 MB production model weights)
+
+### 1. Clone the repository and pull LFS weights
 ```bash
 git clone https://github.com/apuravmanhas/weapon-detector.git
 cd weapon-detector
+git lfs pull
 ```
 
 ### 2. Create and activate a virtual environment
 ```bash
-# Windows
-python -m venv venv
-.\venv\Scripts\activate
-
 # Linux / macOS
 python3 -m venv venv
 source venv/bin/activate
+
+# Windows (PowerShell)
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 ```
 
 ### 3. Install dependencies
@@ -92,23 +98,34 @@ pip install -r requirements.txt
 
 ## Usage
 
-### 1. Quick Verification (Sample Image)
-Run inference on the included sample image to verify your setup:
+### 1. Test Single Image
+Run inference on an image and save the annotated output:
 ```bash
 python detect.py --source assets/sample.jpg --save result.jpg
 ```
 
-### 2. Live Webcam Feed
-Runs real-time detection on your default camera:
+### 2. Real-Time Camera Stream
+Run detection on your connected webcam or camera feed:
 ```bash
 python detect.py --source 0
 ```
-*Note for Windows users:* The script automatically selects the `DirectShow` backend to avoid camera initialization freezes.
+*Note for Windows users:* The CLI automatically probes `DirectShow` (`CAP_DSHOW`) and `MSMF` backends to prevent camera capture freezing.
 
-### 3. Video File
-Process a recorded CCTV or video clip and save the annotated output:
+### 3. Recorded Video / CCTV Stream
+Process a video clip and export the annotated stream:
 ```bash
 python detect.py --source input_cctv.mp4 --save output_annotated.mp4
+```
+
+### 4. Switch Models and Resolution
+By default, `detect.py` loads the production YOLO11x model if present. To manually specify weights or increase spatial resolution for distant targets:
+
+```bash
+# Run with YOLO11x at 800x800 resolution for long-range CCTV cameras
+python detect.py --weights weights/yolo11x_weapon_production.pt --imgsz 800 --source input_cctv.mp4
+
+# Run with lightweight YOLO11m baseline
+python detect.py --weights weights/best.pt --imgsz 640 --source 0
 ```
 
 ---
@@ -117,24 +134,25 @@ python detect.py --source input_cctv.mp4 --save output_annotated.mp4
 
 | Argument | Type | Default | Description |
 | :--- | :---: | :---: | :--- |
-| `--source` | `str` | `0` | Camera index (`0`), video path, or image path. |
-| `--weights` | `str` | `weights/best.pt` | Path to model weights file. |
-| `--conf` | `float` | `0.40` | Minimum confidence threshold for detection. |
-| `--show-conf` | `flag` | `False` | Display confidence score on bounding boxes. |
-| `--save` | `str` | `None` | Path to save annotated output image/video. |
-| `--no-show` | `flag` | `False` | Run in headless mode without preview window. |
-| `--device` | `str` | `None` | Device selection (`cuda:0`, `cpu`, or auto). |
+| `--source` | `str` | `0` | Camera device index (`0`), video path, or image path. |
+| `--weights` | `str` | Auto-detect | Path to `.pt` weights (defaults to YOLO11x if present, else YOLO11m). |
+| `--conf` | `float` | `0.35` | Minimum confidence score threshold for detection. |
+| `--imgsz` | `int` | `640` | Inference input resolution (`640` or `800` for high accuracy). |
+| `--show-conf` | `flag` | `False` | Display confidence score badges on bounding boxes. |
+| `--save` | `str` | `None` | Output file path to save annotated image or video. |
+| `--no-show` | `flag` | `False` | Run in headless mode without a preview GUI window. |
+| `--device` | `str` | `None` | Compute device (`cuda:0`, `cpu`, or auto-detect). |
 
 ---
 
 ## Security & Privacy Safeguards
 
-- **Zero External Telemetry:** All inference executes locally on your hardware. No video frames, images, or metrics are uploaded or transmitted externally.
-- **No Hardcoded Secrets:** This repository contains no API keys, private tokens, or personal identifiers.
-- **Git Protection:** `.gitignore` is configured to prevent accidental commits of `.env` files, credentials, local training logs, and recorded media.
+- **100% On-Premise Execution:** All inference runs locally on the host machine. No frames, video streams, or telemetry data are transmitted externally.
+- **No Hardcoded Credentials:** Zero API keys, authentication tokens, or personal identifiers exist in this codebase.
+- **Repository Integrity:** `.gitignore` blocks `.env` files, credential dumps, local test videos, and model training artifacts.
 
 ---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is open-source and licensed under the [MIT License](LICENSE).

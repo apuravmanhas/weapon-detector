@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Real-Time Weapon Detection CLI
-Runs inference on webcam, video files, or images using fine-tuned YOLO11m weights.
+Runs inference on webcam feeds, video files, or images using fine-tuned YOLO11 weights.
+Supports TitanGuard YOLO11x (56.9M params) and baseline models.
 """
 
 import argparse
@@ -14,8 +15,14 @@ from src.detector import WeaponDetector
 
 
 def parse_args():
+    default_weights = (
+        "weights/yolo11x_weapon_production.pt"
+        if os.path.exists("weights/yolo11x_weapon_production.pt")
+        else "weights/best.pt"
+    )
+
     parser = argparse.ArgumentParser(
-        description="Real-Time Weapon Detection in Surveillance Feeds (YOLO11m)"
+        description="Real-Time Weapon Detection in Surveillance Feeds (YOLO11x / YOLO11m)"
     )
     parser.add_argument(
         "--source",
@@ -26,14 +33,20 @@ def parse_args():
     parser.add_argument(
         "--weights",
         type=str,
-        default="weights/best.pt",
+        default=default_weights,
         help="Path to trained model weights (.pt)."
     )
     parser.add_argument(
         "--conf",
         type=float,
-        default=0.40,
-        help="Confidence threshold for weapon detection (default: 0.40)."
+        default=0.35,
+        help="Confidence threshold for weapon detection (default: 0.35)."
+    )
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=640,
+        help="Inference spatial resolution (default: 640; 800 for max accuracy)."
     )
     parser.add_argument(
         "--show-conf",
@@ -61,13 +74,18 @@ def parse_args():
 
 
 def open_capture(source: str):
-    """Open video capture with DirectShow backend support for Windows webcams."""
+    """Open video capture with multi-backend fallback for camera streams."""
     if source.isdigit():
         cam_idx = int(source)
+        # DirectShow prevents deadlocks on modern Windows systems
         if sys.platform.startswith("win"):
-            cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
-            if cap.isOpened():
-                return cap
+            for api in (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY):
+                cap = cv2.VideoCapture(cam_idx, api)
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        return cap
+                    cap.release()
         return cv2.VideoCapture(cam_idx)
     return cv2.VideoCapture(source)
 
@@ -77,17 +95,17 @@ def main():
 
     if not os.path.exists(args.weights):
         print(f"[Error] Model weights not found at: {args.weights}")
-        print("Ensure 'weights/best.pt' is present or specify via --weights.")
+        print("Ensure weights file exists or specify path via --weights.")
         sys.exit(1)
 
-    print(f"[Info] Loading model from: {args.weights}")
+    print(f"[Info] Loading model weights: {args.weights}")
     detector = WeaponDetector(
         weights_path=args.weights,
         conf_threshold=args.conf,
         device=args.device
     )
 
-    # 1. Single Image Processing
+    # 1. Single Image Inference
     image_extensions = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
     if os.path.isfile(args.source) and args.source.lower().endswith(image_extensions):
         frame = cv2.imread(args.source)
@@ -95,14 +113,14 @@ def main():
             print(f"[Error] Could not read image: {args.source}")
             sys.exit(1)
 
-        results = detector.predict(frame)
+        results = detector.predict(frame, imgsz=args.imgsz)
         annotated, detections = detector.annotate_frame(
             frame, results, show_conf=args.show_conf
         )
 
         print(f"[Result] Detected {len(detections)} weapon instance(s).")
         for i, det in enumerate(detections, 1):
-            print(f"  [{i}] Box: {det['box']} | Conf: {det['confidence']:.2f}")
+            print(f"  [{i}] Bounding Box: {det['box']} | Conf: {det['confidence']:.2f}")
 
         if args.save:
             cv2.imwrite(args.save, annotated)
@@ -114,7 +132,7 @@ def main():
             cv2.destroyAllWindows()
         return
 
-    # 2. Video / Camera Stream Processing
+    # 2. Video Stream / Camera Stream Inference
     cap = open_capture(args.source)
     if not cap or not cap.isOpened():
         print(f"[Error] Failed to open video source: {args.source}")
@@ -130,8 +148,8 @@ def main():
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(args.save, fourcc, fps, (width, height))
 
-    print(f"[Info] Starting detection on: {args.source}")
-    print("[Info] Press 'q' in preview window to exit.")
+    print(f"[Info] Active source: {args.source} ({width}x{height} @ {fps} FPS)")
+    print("[Info] Controls: Press 'q' to stop.")
 
     frame_count = 0
     total_detections = 0
@@ -143,7 +161,7 @@ def main():
             if not ret:
                 break
 
-            results = detector.predict(frame)
+            results = detector.predict(frame, imgsz=args.imgsz)
             annotated, detections = detector.annotate_frame(
                 frame, results, show_conf=args.show_conf
             )
