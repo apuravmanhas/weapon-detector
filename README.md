@@ -2,7 +2,7 @@
 
 Real-time automated weapon detection pipeline for CCTV and surveillance video streams, powered by fine-tuned Ultralytics YOLO11 architectures.
 
-![CCTV Detection Preview](docs/cctv_robbery_output.jpg)
+![CCTV Detection Preview](docs/cctv_surveillance_preview.jpg)
 
 ---
 
@@ -44,9 +44,8 @@ weapon-detector/
 ├── assets/
 │   └── sample.jpg          # Unannotated sample frame for verification
 ├── docs/
-│   ├── cctv_robbery_output.jpg
+│   ├── cctv_surveillance_preview.jpg
 │   ├── model_comparison.png
-│   ├── demo_detection.jpg
 │   ├── confusion_matrix.png
 │   ├── pr_curve.png
 │   └── training_results.png
