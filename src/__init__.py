@@ -1,8 +1,8 @@
 """
-Weapon Detector Module
-Core detection engine powered by YOLO11m for real-time surveillance.
+Weapon Detector Package
+Core detection engine powered by fine-tuned YOLO11 models (YOLO11x / YOLO11m).
 """
 
-from .detector import WeaponDetector
+from .detector import TemporalPersistenceFilter, WeaponDetector
 
-__all__ = ["WeaponDetector"]
+__all__ = ["WeaponDetector", "TemporalPersistenceFilter"]
