@@ -70,8 +70,11 @@ detections*.jsonl
 *.engine
 *.torchscript
 
-# Large media files (prevents accidental video commits)
+# Large media & harvested dataset archives (prevents accidental commits)
 *.mp4
 *.avi
 *.mov
 *.mkv
+*.zip
+mined_hard_negatives/
+weights/yolo11x_weapon_v2*.pt

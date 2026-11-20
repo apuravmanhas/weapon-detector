@@ -12,6 +12,34 @@ DEFAULT_WEIGHT_CANDIDATES = (
     "weights/best.pt",
 )
 _LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+DISTRACTOR_CLASS_NAMES = {
+    "phone",
+    "cell phone",
+    "remote",
+    "umbrella",
+    "backpack",
+    "handbag",
+    "table",
+    "dining table",
+    "table_bg",
+    "other_bg",
+    "person",
+    "hand",
+}
+WEAPON_CLASS_KEYWORDS = (
+    "weapon",
+    "gun",
+    "pistol",
+    "handgun",
+    "rifle",
+    "shotgun",
+    "knife",
+    "blade",
+    "revolver",
+    "smg",
+    "larga",
+    "curta",
+)
 
 # Lazily imported on first WeaponDetector instantiation so lightweight utilities stay fast.
 YOLO = None
@@ -111,6 +139,37 @@ def compute_iou(box_a: Sequence[float], box_b: Sequence[float]) -> float:
     return inter / union if union > 0.0 else 0.0
 
 
+def apply_lab_clahe(
+    frame: np.ndarray,
+    clip_limit: float = 2.5,
+    tile_grid: tuple[int, int] = (8, 8),
+) -> np.ndarray:
+    """Apply contrast-limited adaptive histogram equalization to luminance (L channel) in LAB space."""
+    if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+        raise ValueError("Input frame must be a non-empty numpy array.")
+    if frame.ndim == 2 or (frame.ndim == 3 and frame.shape[2] == 1):
+        return frame.copy()
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
+    merged = cv2.merge((clahe.apply(l_ch), a_ch, b_ch))
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+
+def nms_merge(
+    detections: list[dict[str, Any]],
+    iou_threshold: float = 0.58,
+) -> list[dict[str, Any]]:
+    """Merge overlapping multi-scale/tiled detections via greedy confidence NMS."""
+    ordered = sorted(detections, key=lambda d: float(d["confidence"]), reverse=True)
+    kept: list[dict[str, Any]] = []
+    for cand in ordered:
+        if any(compute_iou(cand["box"], prev["box"]) > iou_threshold for prev in kept):
+            continue
+        kept.append(cand)
+    return kept
+
+
 def filter_detections(
     detections: list[dict[str, Any]],
     frame_shape: tuple[int, ...],
@@ -144,11 +203,11 @@ def filter_detections(
         if area / frame_area > max_area_ratio:
             continue
 
-        valid.append({
-            "box": [cx1, cy1, cx2, cy2],
-            "confidence": float(det["confidence"]),
-            "class": det.get("class", "weapon"),
-        })
+        sanitized = dict(det)
+        sanitized["box"] = [cx1, cy1, cx2, cy2]
+        sanitized["confidence"] = float(det["confidence"])
+        sanitized["class"] = det.get("class", "weapon")
+        valid.append(sanitized)
 
     if nested_threshold >= 1.0 or len(valid) <= 1:
         return valid
@@ -258,9 +317,34 @@ class WeaponDetector:
 
         yolo_cls = _get_yolo_class()
         self.model = yolo_cls(self.weights_path)
-        # Enforce unified single-class surveillance mapping regardless of checkpoint class metadata
-        if hasattr(self.model, "names") and isinstance(self.model.names, dict):
-            self.model.names[0] = "weapon"
+
+        raw_names = getattr(self.model, "names", None)
+        if isinstance(raw_names, dict):
+            name_map = {int(k): str(v) for k, v in raw_names.items()}
+        elif isinstance(raw_names, (list, tuple)):
+            name_map = {idx: str(v) for idx, v in enumerate(raw_names)}
+        else:
+            name_map = {}
+
+        if len(name_map) <= 1:
+            # Enforce unified single-class surveillance mapping regardless of legacy class label
+            if isinstance(raw_names, dict):
+                self.model.names[0] = "weapon"
+            self.class_names: dict[int, str] = {0: "weapon"}
+            self.weapon_class_ids: set[int] = {0}
+            self.distractor_class_ids: set[int] = set()
+        else:
+            self.class_names = dict(name_map)
+            matched = {
+                cid
+                for cid, cname in name_map.items()
+                if cname.strip().lower() not in DISTRACTOR_CLASS_NAMES
+                and any(kw in cname.strip().lower() for kw in WEAPON_CLASS_KEYWORDS)
+            }
+            if not matched and 0 in name_map and name_map[0].strip().lower() not in DISTRACTOR_CLASS_NAMES:
+                matched = {0}
+            self.weapon_class_ids = matched
+            self.distractor_class_ids = set(name_map.keys()) - self.weapon_class_ids
 
         self.default_imgsz = self._infer_default_imgsz(resolved_path)
         self._use_quantize: bool | None = None
@@ -298,6 +382,8 @@ class WeaponDetector:
             "device": self.device,
             "verbose": False,
         }
+        if self.distractor_class_ids and self.weapon_class_ids:
+            kwargs["classes"] = sorted(self.weapon_class_ids)
         if self.fp16:
             if self._use_quantize is None:
                 self._use_quantize = _supports_quantize_arg()
@@ -308,23 +394,78 @@ class WeaponDetector:
 
         return self.model.predict(**kwargs)
 
-    def extract_detections(self, results, frame_shape: tuple[int, ...]) -> list[dict[str, Any]]:
-        """Parse and filter Ultralytics Results objects into clean detection dictionaries."""
+    def _extract_raw_from_results(self, results) -> list[dict[str, Any]]:
         raw: list[dict[str, Any]] = []
         for r in results:
             if getattr(r, "boxes", None) is None:
                 continue
             for box in r.boxes:
+                if self.distractor_class_ids and getattr(box, "cls", None) is not None:
+                    cls_id = int(float(box.cls[0]))
+                    if cls_id not in self.weapon_class_ids:
+                        continue
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 raw.append({
                     "box": [x1, y1, x2, y2],
                     "confidence": float(box.conf[0]),
                     "class": "weapon",
                 })
+        return raw
+
+    def extract_detections(self, results, frame_shape: tuple[int, ...]) -> list[dict[str, Any]]:
+        """Parse and filter Ultralytics Results objects into clean detection dictionaries."""
+        raw = self._extract_raw_from_results(results)
         return filter_detections(
             raw,
             frame_shape=frame_shape,
             max_area_ratio=self.max_area_ratio,
+            nested_threshold=self.nested_threshold,
+        )
+
+    def predict_tiled(
+        self,
+        frame: np.ndarray,
+        imgsz: int | None = None,
+        iou: float | None = None,
+        overlap: float = 0.25,
+        merge_iou: float = 0.58,
+        use_clahe: bool = False,
+    ) -> list[dict[str, Any]]:
+        """
+        Run full-frame + 2x2 overlapping tiled inference (SAHI) to recover densely
+        piled or small distant weapons, followed by cross-tile NMS merge and filtering.
+        """
+        if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+            raise ValueError("Input frame must be a non-empty numpy array.")
+
+        infer_frame = apply_lab_clahe(frame) if use_clahe else frame
+        fh, fw = frame.shape[:2]
+
+        all_boxes: list[dict[str, Any]] = []
+        all_boxes.extend(self._extract_raw_from_results(self.predict(infer_frame, imgsz=imgsz, iou=iou)))
+
+        tile_w = min(fw, max(64, int(round(fw * (0.5 + 0.5 * overlap)))))
+        tile_h = min(fh, max(64, int(round(fh * (0.5 + 0.5 * overlap)))))
+        xs = [0] if tile_w >= fw else [0, fw - tile_w]
+        ys = [0] if tile_h >= fh else [0, fh - tile_h]
+
+        if len(xs) > 1 or len(ys) > 1:
+            for y0 in ys:
+                for x0 in xs:
+                    crop = infer_frame[y0 : y0 + tile_h, x0 : x0 + tile_w]
+                    for det_box in self._extract_raw_from_results(self.predict(crop, imgsz=imgsz, iou=iou)):
+                        bx1, by1, bx2, by2 = det_box["box"]
+                        all_boxes.append({
+                            "box": [bx1 + x0, by1 + y0, bx2 + x0, by2 + y0],
+                            "confidence": det_box["confidence"],
+                            "class": det_box["class"],
+                        })
+
+        merged = nms_merge(all_boxes, iou_threshold=merge_iou)
+        return filter_detections(
+            merged,
+            frame_shape=frame.shape,
+            max_area_ratio=max(self.max_area_ratio, 0.85),
             nested_threshold=self.nested_threshold,
         )
 
@@ -334,6 +475,7 @@ class WeaponDetector:
         results_or_detections,
         box_color: tuple[int, int, int] = (0, 0, 255),
         show_conf: bool = False,
+        show_track_id: bool = False,
     ) -> tuple[np.ndarray, list[dict[str, Any]]]:
         """
         Draw detection bounding boxes and labels onto the frame.
@@ -366,8 +508,9 @@ class WeaponDetector:
             x1, y1, x2, y2 = det["box"]
             conf = det["confidence"]
             cls_name = det["class"]
+            prefix = f"#{det['track_id']} " if show_track_id and det.get("track_id") is not None else ""
 
-            label = f"{cls_name.upper()} {conf:.2f}" if show_conf else cls_name.upper()
+            label = f"{prefix}{cls_name.upper()} {conf:.2f}" if show_conf else f"{prefix}{cls_name.upper()}"
             cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, thickness)
 
             (label_w, label_h), _ = cv2.getTextSize(
