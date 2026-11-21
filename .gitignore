@@ -78,3 +78,9 @@ detections*.jsonl
 *.zip
 mined_hard_negatives/
 weights/yolo11x_weapon_v2*.pt
+outputs/
+data/raw/
+data/sequences/
+*.wav
+*.npz
+yolo11*-pose.pt

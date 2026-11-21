@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "notes": "Populate with local clip paths and millisecond-accurate event timestamps. For draw_to_fire clips, verify t_first_shot_ms visually on muzzle flash or slide recoil (optionally assisted by tools/detect_audio_shots.py).",
+  "clips": [
+    {
+      "clip_id": "example_draw_001",
+      "video_path": "data/raw/draw_to_fire/example_draw_001.mp4",
+      "bucket": "draw_to_fire",
+      "split": "eval",
+      "camera_domain": "range_eye_level",
+      "t_draw_start_ms": 1400.0,
+      "t_aim_start_ms": 2050.0,
+      "t_first_shot_ms": 2620.0,
+      "notes": "Holster draw to two-hand sight alignment before first shot."
+    },
+    {
+      "clip_id": "example_passive_001",
+      "video_path": "data/raw/passive_carry/example_passive_001.mp4",
+      "bucket": "passive_carry",
+      "split": "eval",
+      "camera_domain": "cctv",
+      "t_draw_start_ms": null,
+      "t_aim_start_ms": null,
+      "t_first_shot_ms": null,
+      "notes": "Weapon visibly slung/holstered or resting on counter; should remain PASSIVE_PRESENT."
+    },
+    {
+      "clip_id": "example_mimic_001",
+      "video_path": "data/raw/non_weapon_mimic/example_mimic_001.mp4",
+      "bucket": "non_weapon_mimic",
+      "split": "eval",
+      "camera_domain": "webcam",
+      "t_draw_start_ms": null,
+      "t_aim_start_ms": null,
+      "t_first_shot_ms": null,
+      "notes": "Rapidly raising a dark smartphone with two hands to record video; must stay NO_WEAPON."
+    }
+  ]
+}

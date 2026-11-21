@@ -10,10 +10,13 @@ Real-time automated weapon detection pipeline for CCTV and surveillance video st
 
 Surveillance weapon detection requires high recall on small, partially occluded objects while suppressing false alarms from everyday handheld items (phones, umbrellas, wallets, power tools).
 
-This repository ships a complete two-stage surveillance stack:
+This repository ships a complete surveillance detection + pre-firing action anticipation stack:
 1. **Stage-1 — YOLO11x (Production / Default):** 56.87M parameters, trained at `800×800` on 37,641 surveillance frames (high recall on blurry CCTV, fast motion, and oblique angles).
-2. **Stage-2 — ConvNeXt-Tiny Crop Verifier (`weights/crop_verifier_convnext_tiny.pt`, Git LFS):** Trained across 5 classes (`weapon`, `phone`, `umbrella`, `table_bg`, `other_bg`) reaching **99.82% weapon ROC-AUC** to filter oblique smartphone, umbrella, and table-edge false positives at native crop resolution.
-3. **Stage-1 Light — YOLO11m (Baseline):** 20.05M parameters, trained at `640×640` for lower-compute environments.
+2. **Stage-2 — ConvNeXt-Tiny Crop Verifiers (Git LFS):**
+   - `weights/crop_verifier_convnext_tiny_v2.pt` (**Default, 6-Class**): Trained across `weapon`, `phone`, `power_tool`, `umbrella`, `table_bg`, and `other_bg`, achieving **99.98% Weapon-vs-All ROC-AUC**, **0.00% `power_tool` FP@0.52**, and **0.29% `umbrella` FP@0.52** on the held-out 1,517-crop validation split.
+   - `weights/crop_verifier_convnext_tiny.pt` (**5-Class Legacy**): Trained across `weapon`, `phone`, `umbrella`, `table_bg`, and `other_bg` (**99.82% weapon ROC-AUC**).
+3. **Stage-1 Light — YOLO11m (Baseline):** 20.05M parameters, trained at `640×640` for lower-compute environments and FP16 ONNX edge deployment.
+4. **Pre-Firing Intent & Action Anticipation Engine:** Couples weapon detections + Stage-2 verification with weapon-gated 17-keypoint COCO pose (`YOLO11n-pose`), scale-invariant owner association with pose-anchored coasting, 30-D FPS-invariant hand-weapon kinematics, an auditable Biomechanical Hysteresis FSM, and a Causal 1D-TCN / GRU training pipeline (`PASSIVE_PRESENT` → `DRAWING_READYING` → `AIMING_IMMINENT`).
 
 ---
 
@@ -43,14 +46,20 @@ Validation metrics (held-out validation split) and end-to-end inference speed me
 
 ```text
 weapon-detector/
-├── .gitattributes                         # Git LFS tracking for production weights
-├── .gitignore                             # Excludes secrets, caches, and media outputs
-├── LICENSE                                # MIT License
+├── .gitattributes                                # Git LFS tracking for production weights
+├── .gitignore                                    # Excludes secrets, caches, raw clips, and media outputs
+├── LICENSE                                       # MIT License
 ├── README.md
-├── detect.py                              # CLI interface (image, video, RTSP, webcam)
-├── requirements.txt                       # Python dependencies
+├── detect.py                                     # Object-detection CLI (image, video, RTSP, webcam)
+├── requirements.txt                              # Python dependencies
 ├── assets/
-│   └── sample.jpg                         # Unannotated surveillance frame for testing
+│   └── sample.jpg                                # Unannotated surveillance frame for testing
+├── benchmark/
+│   ├── __init__.py
+│   ├── manifest.json                             # Curated 37-clip anticipation benchmark manifest
+│   ├── manifest_template.json                    # Template manifest schema for custom clip buckets
+│   ├── metrics.py                                # Net Effective Lead Time & FAR evaluation metrics
+│   └── schema.py                                 # Typed ClipAnnotation dataclasses & validator
 ├── docs/
 │   ├── cctv_surveillance_preview.jpg
 │   ├── confusion_matrix.png
@@ -58,20 +67,44 @@ weapon-detector/
 │   ├── pr_curve.png
 │   └── training_results.png
 ├── colab/
-│   └── Train_Weapon_V2_Colab.ipynb        # Turnkey Colab training (Stage-2 verifier + V2 models)
+│   ├── Train_Weapon_V2_Colab.ipynb               # Turnkey Colab training (Stage-1 + 5-class verifier)
+│   ├── Train_Stage2_Verifier_6Class_Colab.ipynb  # Zero-leakage 6-class Stage-2 verifier training (OpenImages V7)
+│   └── train_causal_tcn.py                       # Strictly causal 1D-TCN / GRU trainer with anticipation loss
 ├── src/
 │   ├── __init__.py
-│   ├── detector.py                        # WeaponDetector & TemporalPersistenceFilter
-│   ├── tracker.py                         # WeaponTrackManager (velocity + static quarantine)
-│   └── verifier.py                        # Stage-2 CropVerifier (ConvNeXt / MobileNetV3)
+│   ├── detector.py                               # WeaponDetector & TemporalPersistenceFilter
+│   ├── tracker.py                                # WeaponTrackManager (velocity + static quarantine)
+│   ├── verifier.py                               # Stage-2 CropVerifier (for detect.py)
+│   ├── states.py                                 # Readiness ThreatState enum & tracking dataclasses
+│   ├── perception.py                             # Unified Stage-1 (.pt/.onnx/.engine) + 6-class Stage-2 TTL cache
+│   ├── pose.py                                   # Weapon-gated YOLO11-pose estimation + PersonTrackManager
+│   ├── association.py                            # Scale-invariant wrist-to-weapon matching & pose coasting
+│   ├── features.py                               # 30-D scale- & FPS-invariant biomechanical + kinematic extractor
+│   ├── intent_fsm.py                             # Auditable Biomechanical Hysteresis State Machine
+│   ├── temporal_model.py                         # CausalWeaponIntentTCN, CausalWeaponIntentGRU & LeadTimeLoss
+│   ├── pipeline.py                               # End-to-end PreFireIntentPipeline with CUDA-synced telemetry
+│   └── visualizer.py                             # Color-coded readiness HUD + bearer upper-body skeleton overlay
 ├── tests/
-│   └── test_detector.py                   # Unit & smoke tests
+│   ├── test_association.py
+│   ├── test_benchmark_metrics.py
+│   ├── test_detector.py
+│   ├── test_features.py
+│   ├── test_intent_fsm.py
+│   ├── test_perception_cache.py
+│   └── test_temporal_model.py
 ├── tools/
-│   └── mine_hard_negatives.py             # Storage-capped local false-positive crop miner
+│   ├── __init__.py
+│   ├── detect_audio_shots.py                     # Gunshot audio impulse candidate finder for WAV tracks
+│   ├── eval_anticipation.py                      # 37-clip Net Effective Lead Time & latency evaluator
+│   ├── export_onnx.py                            # Lightweight FP16 ONNX exporter for CUDA edge inference
+│   ├── extract_sequences.py                      # Compact 30-D .npz feature sequence extractor for Colab
+│   ├── mine_hard_negatives.py                    # Storage-capped local false-positive crop miner
+│   └── run_intent.py                             # Real-time pre-firing anticipation CLI + profiler
 └── weights/
-    ├── yolo11x_weapon_production.pt       # Production YOLO11x weights (~109 MiB, Git LFS)
-    ├── crop_verifier_convnext_tiny.pt     # Stage-2 ConvNeXt-Tiny verifier (~106 MiB, Git LFS)
-    └── best.pt                            # Baseline YOLO11m weights (~38.6 MiB)
+    ├── yolo11x_weapon_production.pt              # Production YOLO11x weights (~109 MiB, Git LFS)
+    ├── crop_verifier_convnext_tiny_v2.pt         # 6-class ConvNeXt-Tiny v2 verifier (~111 MB, Git LFS)
+    ├── crop_verifier_convnext_tiny.pt            # 5-class ConvNeXt-Tiny v1 verifier (~111 MB, Git LFS)
+    └── best.pt                                   # Baseline YOLO11m weights (~38.6 MiB)
 ```
 
 ---
@@ -80,7 +113,7 @@ weapon-detector/
 
 ### Prerequisites
 - Python 3.10+
-- [Git LFS](https://git-lfs.com/) (required to download `weights/yolo11x_weapon_production.pt`)
+- [Git LFS](https://git-lfs.com/) (required to download `weights/yolo11x_weapon_production.pt` and the `ConvNeXt-Tiny` verifier checkpoints)
 
 ### 1. Clone and pull Git LFS weights
 ```bash
@@ -160,7 +193,92 @@ python -m unittest discover -s tests -v
 
 ---
 
-## CLI Options
+## Pre-Firing Weapon Intent & Action Anticipation
+
+> **Defensive Scope:** Designed exclusively for human-in-the-loop public-safety and security operator early warning. Not intended for autonomous kinetic action or automated targeting.
+
+Static weapon detectors cannot distinguish a firearm resting on a counter or slung passively from one raised into a firing stance half a second before trigger pull. The anticipation pipeline (`tools/run_intent.py`, `src/pipeline.py`) extends Stage-1/Stage-2 detection with causal human pose biomechanics and latency-deducted evaluation:
+
+### Anticipation Architecture
+1. **Stage 1 (`src/perception.py`):** `YOLO11x` (`FP16`, `800×800`, `conf=0.20`) with unified PyTorch (`.pt`), ONNX Runtime CUDA FP16 (`.onnx`), and TensorRT (`.engine`) support.
+2. **Stage 2 (`src/perception.py`):** Auto-prefers 6-class `crop_verifier_convnext_tiny_v2.pt` (falling back to 5-class v1) on lower-confidence detections (`< 0.72`) with tiered thresholds (`verify_thresh=0.52`) and track-level TTL caching (`verifier_cache_ttl=4` frames).
+3. **Weapon-Gated Pose & Coasting (`src/pose.py`, `src/association.py`):** Triggers 17-keypoint `YOLO11n-pose` (`512×512` ONNX Runtime CUDA FP16 or PyTorch) only when a weapon track is active or cooling down, associates each firearm via torso-normalized wrist-to-box edge distance, and applies pose-anchored coasting (`max_coast_frames=12`) across brief draw-occlusion or motion-blur dropouts. Unowned firearms stay locked to `PASSIVE_PRESENT`.
+4. **30-D Kinematics & Causal Intent Engine (`src/features.py`, `src/intent_fsm.py`, `src/temporal_model.py`):** Strictly causal, torso- and FPS-normalized biomechanics (arm extension, shoulder pitch, head/eye cheek-weld sight alignment, upward velocity/acceleration, post-raise stabilization variance, and an optional 2-keypoint `grip -> muzzle` orientation hook) feeding an auditable Biomechanical Hysteresis FSM (`NO_WEAPON`, `PASSIVE_PRESENT`, `DRAWING_READYING`, `AIMING_IMMINENT`) or a trained strictly causal `1D-TCN` / `GRU`.
+
+### Core Metric: Net Effective Lead Time
+Video-timestamp lead time overstates warning margins if processing delay is ignored. The evaluator (`benchmark/metrics.py`) deducts real measured per-frame inference latency before scoring hits:
+```text
+delta_t_net = t_first_shot_ms - (t_alert_frame_ms + inference_latency_ms)
+```
+An alert counts as a valid pre-shot hit only when `delta_t_net > 0` across all three required buckets (`benchmark/schema.py`):
+- `draw_to_fire`: Timestamped draw-to-shot events (`t_draw_start_ms`, `t_aim_start_ms`, `t_first_shot_ms`).
+- `passive_carry`: Real firearms visibly present (slung, holstered, table/counter, walking) without firing intent.
+- `non_weapon_mimic`: Rapid arm-raising distractors without a firearm (smartphones, cordless drills, umbrellas, water bottles, TV remotes).
+
+### 37-Clip End-to-End Speed–Accuracy Pareto Benchmark (RTX 3050 Laptop GPU)
+Evaluated end-to-end across **37 curated clips (12,507 frames)** (`13 draw_to_fire`, `8 passive_carry`, `16 non_weapon_mimic`) with `4 GB VRAM` and `onnxruntime-gpu==1.22.0` (`CUDA 12` + `cuDNN 9`):
+
+| Configuration | Pre-Shot Alert (`DRAWING+`) | Median Net Lead (`DRAW+`) | Imminent Alert (`AIMING`) | Median Net Lead (`AIM`) | Passive FAR | Non-Weapon FAR (`/hr`) | Latency Mean / P50 / P95 / P99 (`FPS`) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **v1 Baseline** (`YOLO11x` PyTorch + Pose 640 PyTorch) | 76.9% | 1090.4 ms | 53.8% | 328.8 ms | 2.9% | 288.95 | 82.6 / 83.74 / 124.85 / 143.92 ms (12.1) |
+| **v1.5 Coasting + Verifier Cache** (`YOLO11x` PyTorch + Pose PyTorch) | **100.0%** | 890.8 ms | 69.2% | 354.1 ms | 2.4% | 177.81 | 81.6 / 83.19 / 116.85 / 138.95 ms (12.3) |
+| **Hybrid v1** (`YOLO11x` PyTorch + Verifier v1 + Pose ONNX 512) | **100.0%** | 895.4 ms | **76.9%** | 347.8 ms | **2.0%** | 266.72 | 71.32 / 69.1 / 99.73 / 119.67 ms (14.0) |
+| **Hybrid + Verifier v2** (`YOLO11x` PyTorch + 6-Class Verifier v2 + Pose ONNX 512) | **100.0%** | 905.5 ms | **76.9%** | 365.9 ms | 2.1% | 222.27 | 69.11 / 69.36 / 92.44 / 103.06 ms (14.5) |
+| **Full-ONNX Edge** (`YOLO11m` 640 ONNX + Verifier v1 + Pose ONNX 512) | 53.8% | 618.9 ms | 38.5% | 475.3 ms | 2.4% | **133.36** | **36.9 / 36.71 / 64.59 / 73.75 ms (27.1)** |
+
+- **Isolated 30-Frame CUDA-Synced Micro-Benchmark:** Compute-bound `YOLO11x @ 800px` runs faster in PyTorch cuDNN FP16 (`66.45 ms/frame`) than ORT CUDA FP16 (`74.32 ms/frame`, `0.89x`), whereas kernel-launch-bound `YOLO11m @ 640px` (`33.65 -> 23.25 ms/frame`, **1.45x**) and `YOLO11n-pose @ 512px` (`29.20 -> 19.40 ms/frame`, **1.51x**) accelerate cleanly under ORT CUDA FP16 (`46.22 MB` total ONNX weight footprint).
+- **Stage-2 Verifier v2 Impact:** Adding OpenImages V7 `power_tool` hard negatives eliminated `m03_cordless_drill_1` false alarms (`47 -> 0` frames) and cut `m09_cordless_drill_2` (`49 -> 21` frames) and `m02_concert_phone_raise` (`9 -> 7` frames), keeping **13/16** mimic clips at **0** false-aim frames while improving median net lead times to **905.5 ms** (`DRAWING+`) and **365.9 ms** (`AIMING`) at **92.44 ms P95 (`14.5 FPS`)**.
+
+### Single-Clip Active-Frame Stage Breakdown (PyTorch Eager FP16 Baseline)
+Measured with `torch.cuda.synchronize()` across 250 active-weapon frames (`854×480` video, `YOLO11x @ 800px` + `ConvNeXt-Tiny` verifier + `YOLO11n-pose @ 512px` + Biomechanical FSM):
+
+| Stage | Mean | P50 | P95 | P99 |
+| :--- | :---: | :---: | :---: | :---: |
+| Stage 1 Weapon Detector (`YOLO11x`, 800px) | 54.21 ms | 54.41 ms | 62.83 ms | 68.34 ms |
+| Stage 2 Crop Verifier (`ConvNeXt-Tiny`, uncached) | 17.76 ms | 17.81 ms | 21.35 ms | 23.55 ms |
+| Pose Backbone (`YOLO11n-pose`, 512px, gated) | 33.87 ms | 33.88 ms | 39.44 ms | 43.04 ms |
+| Weapon Tracker + Owner Assoc + 30-D Features + Intent FSM | 1.16 ms | 1.10 ms | — | — |
+| **Total End-to-End (PyTorch Eager Active Frame)** | **107.05 ms** | **107.79 ms** | **121.55 ms** | **134.15 ms** |
+
+### Pre-Firing Anticipation Usage
+```bash
+# Optional: export lightweight YOLO11m (640) + YOLO11n-pose (512) FP16 ONNX models
+python tools/export_onnx.py --device 0 --out-dir weights
+
+# Real-time hybrid anticipation inference on video / RTSP / webcam
+python tools/run_intent.py \
+  --source path/to/video.mp4 \
+  --pose-weights weights/yolo11n_pose_512.onnx \
+  --pose-imgsz 512 \
+  --max-dim 1280 \
+  --save outputs/intent_demo.mp4 \
+  --no-show
+
+# Automated 37-clip Net Effective Lead Time benchmark
+python tools/eval_anticipation.py \
+  --manifest benchmark/manifest.json \
+  --pose-weights weights/yolo11n_pose_512.onnx \
+  --pose-imgsz 512 \
+  --out-dir outputs/eval_hybrid_v2
+
+# Optional: extract compact 30-D .npz sequences and train Causal 1D-TCN / GRU
+python tools/extract_sequences.py --manifest benchmark/manifest.json --out-dir data/sequences
+python colab/train_causal_tcn.py --seq-dir data/sequences --arch tcn --epochs 45 --out weights/causal_intent_tcn.pt
+```
+- **Google Colab 6-Class Verifier Training:** Open [colab/Train_Stage2_Verifier_6Class_Colab.ipynb](colab/Train_Stage2_Verifier_6Class_Colab.ipynb) on a free Colab `T4 GPU` to retrain `crop_verifier_convnext_tiny_v2.pt` from public OpenImages V7 hard negatives with image-grouped splits and atomic Drive checkpoints.
+- **Audio-Assisted Shot Timestamp Helper:** `python tools/detect_audio_shots.py path/to/clip.wav`
+
+### Honest Physical & Engineering Limits
+No vision-only model can beat physical observability or frame-rate limits:
+- **Lookalike Dark Cylinders Shouldered Like Rifles:** A closed black umbrella intentionally shouldered in a firing stance (`m08_umbrella_rifle_aim`, `95` false aim frames in the Hybrid v2 benchmark) closely mimics a matte barrel in tight crops.
+- **Occluded / Back-Turned Draws:** If the torso completely blocks the draw and firearm until trigger pull, optical lead time approaches zero.
+- **Ultra-Fast Hip Draws (< 350 ms):** When camera frame intervals plus persistence and inference consume most of the motion window, net lead time shrinks sharply.
+
+All benchmark numbers in this repository come from recorded video frames and CUDA-synchronized latencies.
+
+---
+
+## CLI Options (`detect.py`)
 
 | Argument | Type | Default | Description |
 | :--- | :---: | :---: | :--- |
@@ -194,9 +312,9 @@ python -m unittest discover -s tests -v
 ## Security & Privacy Safeguards
 
 - **Local Execution Only:** All inference runs on host hardware with zero outbound network telemetry.
-- **Credential-Safe Stream Logging:** Embedded user credentials in `rtsp://user:pass@host` URLs are masked (`***:***@host`) before stdout logging.
-- **Sanitized Model Checkpoints:** Production weights contain unified class names (`weapon`) with local training paths and timestamps stripped.
-- **Repository Hygiene:** `.gitignore` excludes `.env`, keyfiles, test artifacts, virtual environments, and output videos/exports.
+- **Credential-Safe Stream Logging:** Embedded user credentials in `rtsp://user:pass@host` URLs are masked (`***:***@host`) before stdout/exception logging across both `detect.py` and `tools/run_intent.py`.
+- **Sanitized Model Checkpoints:** Production weights (`weights_only=True` compatible) strip local training paths and timestamps.
+- **Repository Hygiene:** `.gitignore` excludes `.env`, keyfiles, test artifacts, virtual environments, raw video/sequence caches, and output videos/exports.
 
 ---
 
